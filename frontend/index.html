@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phishing Guard Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    main { max-width: 1200px; margin: auto; }
+    .risk-badge { padding: 0.3rem 0.9rem; border-radius: 999px; font-weight: 600; }
+    .risk-BAIXO { background: #16a34a; }
+    .risk-MÉDIO { background: #facc15; color: #1f2937; }
+    .risk-ALTO { background: #dc2626; }
+    table { width: 100%; }
+    .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-top: 1rem; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+    canvas { width: 100%; }
+    .history-list { max-height: 280px; overflow-y: auto; }
+    .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Phishing Guard</h1>
+    <p>Analise URLs suspeitas com heurísticas avançadas e histórico detalhado.</p>
+
+    <section class="card">
+      <form id="url-form">
+        <label for="url">URL para análise</label>
+        <input type="url" id="url" name="url" placeholder="https://exemplo.com" required />
+        <button type="submit">Analisar</button>
+      </form>
+      <div id="current-result" style="margin-top:1.5rem;"></div>
+    </section>
+
+    <section class="card">
+      <header style="display:flex; justify-content:space-between; align-items:center;">
+        <h2>Histórico de Análises</h2>
+        <button id="export-btn" class="secondary">Exportar CSV</button>
+      </header>
+      <div class="history-list" id="history-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Distribuição de Risco</h2>
+      <canvas id="riskChart"></canvas>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const API_BASE = 'http://127.0.0.1:8000';
+    const urlForm = document.getElementById('url-form');
+    const resultContainer = document.getElementById('current-result');
+    const historyList = document.getElementById('history-list');
+    const exportBtn = document.getElementById('export-btn');
+    let riskChart;
+
+    const riskColors = {
+      'BAIXO': '#16a34a',
+      'MÉDIO': '#fbbf24',
+      'ALTO': '#f87171'
+    };
+
+    async function fetchJSON(path, options = {}) {
+      const response = await fetch(`${API_BASE}${path}`, options);
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      return response.json();
+    }
+
+    const heuristicExplanations = {
+      'Listas de phishing': 'Verifica se o domínio está em bases de dados conhecidas de phishing (PhishTank, OpenPhish). Domínios nessas listas são confirmadamente maliciosos.',
+      'Padrões do domínio': 'Analisa características suspeitas como números substituindo letras (ex: paypa1.com), excesso de subdomínios ou caracteres especiais. Esses padrões são comuns em tentativas de imitar marcas legítimas.',
+      'DNS dinâmico': 'Verifica se o domínio usa serviços de DNS dinâmico (no-ip, dyndns). Esses serviços são frequentemente usados por atacantes para criar domínios temporários e difíceis de rastrear.',
+      'Idade do domínio': 'Domínios muito novos (menos de 180 dias) são suspeitos, pois atacantes frequentemente criam domínios temporários para campanhas de phishing de curta duração.',
+      'Redirecionamentos': 'Múltiplos redirecionamentos podem ser usados para ocultar a URL final maliciosa e dificultar a detecção.',
+      'Formulários sensíveis': 'Presença de formulários de login pode indicar tentativa de coletar credenciais de usuários desavisados.',
+      'Palavras sensíveis': 'Detecta frases comuns em campanhas de phishing como "verify your account", "urgent action required" que são usadas para criar senso de urgência.',
+      'Certificado SSL': 'Verifica se o certificado SSL é válido, não expirou e corresponde ao domínio. Certificados inválidos ou expirados indicam falta de cuidado ou sites maliciosos.',
+      'Similaridade com marcas': 'Usa distância de Levenshtein para detectar domínios similares a marcas conhecidas (ex: paypa1.com vs paypal.com). Essa técnica é comum em typosquatting.'
+    };
+
+    function renderHeuristics(heuristics) {
+      const rows = heuristics.map(h => `
+        <tr>
+          <td>
+            <strong>${h.name}</strong>
+            <br><small style="color: #94a3b8; font-size: 0.85em;">${heuristicExplanations[h.name] || 'Análise de segurança'}</small>
+          </td>
+          <td>${h.details}</td>
+          <td>${h.passed ? '✅' : '⚠️'}</td>
+          <td>${h.score_impact > 0 ? '+' : ''}${h.score_impact}</td>
+        </tr>
+      `).join('');
+      return `
+        <h3>Detalhes da Análise</h3>
+        <p style="color: #94a3b8; font-size: 0.9em; margin-bottom: 1rem;">
+          Cada critério abaixo é analisado para determinar o nível de risco. Valores negativos indicam características suspeitas, valores positivos indicam características seguras.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Critério</th>
+              <th>Detalhes</th>
+              <th>Status</th>
+              <th>Impacto</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderResult(result) {
+      return `
+        <div>
+          <p><strong>URL:</strong> ${result.url}</p>
+          <p><strong>Domínio:</strong> ${result.domain}</p>
+          <p><span class="risk-badge risk-${result.risk_level}">${result.risk_level}</span> Score: ${result.overall_score}</p>
+          ${renderHeuristics(result.heuristics)}
+        </div>
+      `;
+    }
+
+    function renderHistory(items) {
+      if (!items.length) {
+        historyList.innerHTML = '<p>Nenhuma análise ainda.</p>';
+        return;
+      }
+      historyList.innerHTML = items.slice().reverse().map(item => `
+        <article>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <span class="status-dot" style="background:${riskColors[item.risk_level]};"></span>
+              <strong>${item.domain}</strong>
+            </div>
+            <small>${new Date(item.timestamp).toLocaleString()}</small>
+          </div>
+          <p>${item.url}</p>
+        </article>
+      `).join('');
+    }
+
+    function renderChart(items) {
+      const counts = { 'BAIXO': 0, 'MÉDIO': 0, 'ALTO': 0 };
+      items.forEach(item => counts[item.risk_level] = (counts[item.risk_level] || 0) + 1);
+      const ctx = document.getElementById('riskChart');
+      if (riskChart) riskChart.destroy();
+      riskChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(counts),
+          datasets: [{
+            label: 'URLs por nível de risco',
+            data: Object.values(counts),
+            backgroundColor: Object.keys(counts).map(level => riskColors[level])
+          }]
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { precision:0 } } }
+        }
+      });
+    }
+
+    async function refreshHistory() {
+      try {
+        const data = await fetchJSON('/history');
+        renderHistory(data.items);
+        renderChart(data.items);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    urlForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(urlForm);
+      const url = formData.get('url');
+      resultContainer.innerHTML = '<progress></progress>';
+      try {
+        const analysis = await fetchJSON('/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        resultContainer.innerHTML = renderResult(analysis);
+        await refreshHistory();
+      } catch (err) {
+        resultContainer.innerHTML = `<p>Erro: ${err.message}</p>`;
+      }
+    });
+
+    exportBtn.addEventListener('click', async () => {
+      try {
+        const data = await fetchJSON('/history/export');
+        const blob = new Blob([data.data], { type: 'text/csv' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = data.filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } catch (err) {
+        alert('Falha no export: ' + err.message);
+      }
+    });
+
+    refreshHistory();
+  </script>
+</body>
+</html>

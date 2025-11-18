@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# FastAPI/UVicorn
+*.log
+
+# Frontend build/temp
+node_modules/
+dist/
+build/
+*.cache
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Data artifacts
+/data/history.json
