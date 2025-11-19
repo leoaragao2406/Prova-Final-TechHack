@@ -2,6 +2,11 @@
 
 Ferramenta completa de análise de URLs para detecção de phishing, implementando heurísticas avançadas e interface web interativa. Atende aos requisitos dos **Conceitos C e B** da prova final.
 
+## 🎥 Demonstração
+
+
+**Link do vídeo:** [Assistir demonstração completa](https://youtu.be/pYIFBDxoKEA?si=GgneLD5gKZ48gMbe)
+
 ## 🎯 Funcionalidades Implementadas
 
 ### Conceito C (Requisitos Básicos)
